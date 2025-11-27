@@ -1,226 +1,200 @@
-import pygame
-import sys
-import math
+from qiskit import QuantumCircuit, QuantumRegister, ClassicalRegister
+from qiskit_aer import AerSimulator
+import numpy as np
 
 
-BACKGROUND = (240, 248, 255)
-GRID_COLOR = (100, 149, 237)
-X_COLOR = (65, 105, 225)
-O_COLOR = (220, 20, 60)
-TEXT_COLOR = (0, 0, 0)
-
-class RexzeaTicTacToe:
-    def __init__(self, screen_width=800, screen_height=900):
-        pygame.init()
-        pygame.display.set_caption('Rexzea 5x5 Tic Tac Toe')
-        
-        self.screen_width = screen_width
-        self.screen_height = screen_height
-        self.screen = pygame.display.set_mode((screen_width, screen_height))
-        
-        self.board_size = 5
-        self.board = [[' ' for _ in range(self.board_size)] for _ in range(self.board_size)]
-        
-        self.cell_size = screen_width // self.board_size
-        self.current_player = 'X'
-        self.game_over = False
-        self.winner = None
-
-        self.title_font = pygame.font.Font(None, 72)
-        self.font = pygame.font.Font(None, 48)
-        
-    def draw_board(self):
-        self.screen.fill(BACKGROUND)
-
-        title = self.title_font.render('5x5 Tic Tac Toe', True, TEXT_COLOR)
-        title_rect = title.get_rect(center=(self.screen_width//2, 50))
-        self.screen.blit(title, title_rect)
-
-        for x in range(self.board_size + 1):
-            pygame.draw.line(self.screen, GRID_COLOR, 
-                             (x * self.cell_size, 100), 
-                             (x * self.cell_size, self.screen_height), 2)
-            pygame.draw.line(self.screen, GRID_COLOR, 
-                             (0, x * self.cell_size + 100), 
-                             (self.screen_width, x * self.cell_size + 100), 2)
-
-        for row in range(self.board_size):
-            for col in range(self.board_size):
-                x = col * self.cell_size + self.cell_size // 2
-                y = row * self.cell_size + 100 + self.cell_size // 2
-                
-                if self.board[row][col] == 'X':
-                    self.draw_x(x, y)
-                elif self.board[row][col] == 'O':
-                    self.draw_o(x, y)
+def create_oracle(secret_string):
+    n = len(secret_string)
+    oracle = QuantumCircuit(n + 1, name='Oracle')
+    for i, bit in enumerate(reversed(secret_string)):
+        if bit == '1':
+            oracle.cx(i, n)
     
-    def draw_x(self, x, y):
-        line_width = 8
-        size = self.cell_size * 0.7
-        pygame.draw.line(self.screen, X_COLOR, 
-                         (x - size/2, y - size/2), 
-                         (x + size/2, y + size/2), line_width)
-        pygame.draw.line(self.screen, X_COLOR, 
-                         (x + size/2, y - size/2), 
-                         (x - size/2, y + size/2), line_width)
+    return oracle
+
+
+def bernstein_vazirani_circuit(secret_string):
+    n = len(secret_string)
     
-    def draw_o(self, x, y):
-        line_width = 8
-        size = self.cell_size * 0.6
-        pygame.draw.circle(self.screen, O_COLOR, (x, y), size/2, line_width)
+    qr = QuantumRegister(n, 'q')
+    auxiliary = QuantumRegister(1, 'aux')
+    cr = ClassicalRegister(n, 'c')
     
-    def is_winner(self, player): 
-        for row in range(self.board_size):
-            for col in range(self.board_size - 4):
-                if all(self.board[row][col+i] == player for i in range(5)):
-                    return True
-        
-        for col in range(self.board_size):
-            for row in range(self.board_size - 4):
-                if all(self.board[row+i][col] == player for i in range(5)):
-                    return True
-        
-        for row in range(self.board_size - 4):
-            for col in range(self.board_size - 4):
-                if all(self.board[row+i][col+i] == player for i in range(5)):
-                    return True
-        
-        for row in range(self.board_size - 4):
-            for col in range(4, self.board_size):
-                if all(self.board[row+i][col-i] == player for i in range(5)):
-                    return True
-        
-        return False
+    circuit = QuantumCircuit(qr, auxiliary, cr)
     
-    def is_board_full(self):
-        return all(cell != ' ' for row in self.board for cell in row)
+    circuit.x(auxiliary[0])
+    circuit.h(auxiliary[0])
+
+    circuit.h(qr)
     
-    def minimax(self, depth, is_maximizing, alpha=float('-inf'), beta=float('inf')):
-        if self.is_winner('O'):
-            return 1
-        if self.is_winner('X'):
-            return -1
-        if self.is_board_full() or depth == 0:
-            return 0
+    circuit.barrier()
+    
+    oracle = create_oracle(secret_string)
+    circuit.compose(oracle, qubits=list(range(n + 1)), inplace=True)
+    
+    circuit.barrier()
+    
+    circuit.h(qr)
+    
+    circuit.measure(qr, cr)
+    
+    return circuit
+
+
+def simulate_circuit(circuit, shots=1024):
+    simulator = AerSimulator()
+    job = simulator.run(circuit, shots=shots)
+    result = job.result()
+    counts = result.get_counts()
+    
+    return counts
+
+
+def validate_binary_string(s):
+    return all(c in '01' for c in s) and len(s) > 0
+
+
+def display_circuit_info(secret_string, circuit):
+    print("\n" + "="*70)
+    print("CIRCUIT INFORMATION")
+    print("="*70)
+    print(f"Number of qubits: {circuit.num_qubits}")
+    print(f"Number of classical bits: {circuit.num_clbits}")
+    print(f"Circuit depth: {circuit.depth()}")
+    print(f"Secret string length: {len(secret_string)} bits")
+    print("="*70)
+
+
+def run_bernstein_vazirani(secret_string, show_circuit=True, shots=1024):
+    print("\n" + "="*70)
+    print("BERNSTEIN-VAZIRANI ALGORITHM")
+    print("="*70)
+    print(f"Secret string (hidden): {secret_string}")
+    print(f"Length: {len(secret_string)} bits")
+    print("="*70)
+    
+    print("\n[1] Building quantum circuit...")
+    circuit = bernstein_vazirani_circuit(secret_string)
+    
+    display_circuit_info(secret_string, circuit)
+    
+    if show_circuit:
+        print("\n[2] Circuit Diagram:")
+        print("-" * 70)
+        print(circuit.draw(output='text', fold=-1))
+        print("-" * 70)
+    
+    print(f"\n[3] Running quantum simulation with {shots} shots...")
+    counts = simulate_circuit(circuit, shots=shots)
+    
+    print("\n" + "="*70)
+    print("MEASUREMENT RESULTS")
+    print("="*70)
+    
+    sorted_counts = sorted(counts.items(), key=lambda x: x[1], reverse=True)
+    
+    for measured_string, count in sorted_counts:
+        percentage = (count / shots) * 100
+        bar = '█' * int(percentage / 2)
+        print(f"{measured_string}: {count:4d} ({percentage:6.2f}%) {bar}")
+    
+    found_string = max(counts, key=counts.get)
+    
+    print("="*70)
+    print("\n" + "="*70)
+    print("ALGORITHM RESULT")
+    print("="*70)
+    print(f"Found string:  {found_string}")
+    print(f"Secret string: {secret_string}")
+    
+    if found_string == secret_string:
+        print("\n✓ SUCCESS! The algorithm correctly found the secret string!")
+    else:
+        print("\n✗ MISMATCH! This shouldn't happen in ideal conditions.")
+    
+    print("="*70)
+    
+    print("\n" + "="*70)
+    print("QUANTUM ADVANTAGE")
+    print("="*70)
+    print(f"Quantum queries needed:  1")
+    print(f"Classical queries needed: {len(secret_string)} (in worst case)")
+    print(f"Speedup factor: {len(secret_string)}x")
+    print("="*70 + "\n")
+
+
+def interactive_mode():
+    print("\n" + "="*70)
+    print("BERNSTEIN-VAZIRANI ALGORITHM - INTERACTIVE MODE")
+    print("="*70)
+    print("\nThis algorithm can find a hidden binary string in just ONE query!")
+    print("Classical algorithms would need multiple queries (one per bit).\n")
+    
+    while True:
+        print("\nOptions:")
+        print("1. Enter custom secret string")
+        print("2. Use random secret string")
+        print("3. Run demo with example strings")
+        print("4. Exit")
         
-        if is_maximizing:
-            best_score = float('-inf')
-            for row in range(self.board_size):
-                for col in range(self.board_size):
-                    if self.board[row][col] == ' ':
-                        self.board[row][col] = 'O'
-                        score = self.minimax(depth - 1, False, alpha, beta)
-                        self.board[row][col] = ' '
-                        best_score = max(score, best_score)
-                        alpha = max(alpha, best_score)
-                        if beta <= alpha:
-                            break
-            return best_score
+        choice = input("\nEnter your choice (1-4): ").strip()
+        
+        if choice == '1':
+            secret = input("\nEnter binary string (e.g., '101010'): ").strip()
+            if not validate_binary_string(secret):
+                print("❌ Error: String must contain only 0s and 1s!")
+                continue
+            
+            show = input("Show circuit diagram? (y/n): ").strip().lower() == 'y'
+            shots = input("Number of shots (default 1024): ").strip()
+            shots = int(shots) if shots.isdigit() else 1024
+            
+            run_bernstein_vazirani(secret, show_circuit=show, shots=shots)
+            
+        elif choice == '2':
+            length = input("\nEnter string length (default 6): ").strip()
+            length = int(length) if length.isdigit() and int(length) > 0 else 6
+            
+            secret = ''.join(np.random.choice(['0', '1']) for _ in range(length))
+            
+            show = input("Show circuit diagram? (y/n): ").strip().lower() == 'y'
+            shots = input("Number of shots (default 1024): ").strip()
+            shots = int(shots) if shots.isdigit() else 1024
+            
+            run_bernstein_vazirani(secret, show_circuit=show, shots=shots)
+            
+        elif choice == '3':
+            print("\nRunning demos with example strings...\n")
+            examples = ['101', '1111', '10101010', '11001100']
+            
+            for secret in examples:
+                input(f"\nPress Enter to run with secret string '{secret}'...")
+                run_bernstein_vazirani(secret, show_circuit=False, shots=1024)
+            
+        elif choice == '4':
+            print("\nThank you for using the Bernstein-Vazirani Algorithm!")
+            print("="*70 + "\n")
+            break
+            
         else:
-            best_score = float('inf')
-            for row in range(self.board_size):
-                for col in range(self.board_size):
-                    if self.board[row][col] == ' ':
-                        self.board[row][col] = 'X'
-                        score = self.minimax(depth - 1, True, alpha, beta)
-                        self.board[row][col] = ' '
-                        best_score = min(score, best_score)
-                        beta = min(beta, best_score)
-                        if beta <= alpha:
-                            break
-            return best_score
-    
-    def get_best_move(self):
-        best_score = float('-inf')
-        best_move = None
-        
-        for row in range(self.board_size):
-            for col in range(self.board_size):
-                if self.board[row][col] == ' ':
-                    self.board[row][col] = 'O'
-                    score = self.minimax(3, False)
-                    self.board[row][col] = ' '
-                    if score > best_score:
-                        best_score = score
-                        best_move = (row, col)
-        
-        return best_move
-    
-    def ai_move(self):
-        move = self.get_best_move()
-        if move:
-            self.board[move[0]][move[1]] = 'O'
-    
-    def show_game_over(self):
-        self.screen.fill(BACKGROUND)
-                                                     
-        if self.winner:
-            text = f"{self.winner} Victory!"
-        else:             
-            text = "Draw Game!"
-        
-        game_over_text = self.font.render(text, True, TEXT_COLOR)
-        text_rect = game_over_text.get_rect(center=(self.screen_width//2, self.screen_height//2))
-        self.screen.blit(game_over_text, text_rect)
-        
-        restart_text = pygame.font.Font(None, 36).render('Press SPACE to Replay', True, GRID_COLOR)
-        restart_rect = restart_text.get_rect(center=(self.screen_width//2, self.screen_height//2 + 50))
-        self.screen.blit(restart_text, restart_rect)
-        
-        pygame.display.flip()
-    
-    def reset_game(self):
-        self.board = [[' ' for _ in range(self.board_size)] for _ in range(self.board_size)]
-        self.current_player = 'X'
-        self.game_over = False
-        self.winner = None
-    
-    def run(self):
-        clock = pygame.time.Clock()
-        
-        while True:
-            for event in pygame.event.get():
-                if event.type == pygame.QUIT:
-                    pygame.quit()
-                    sys.exit()
-                
-                if not self.game_over and event.type == pygame.MOUSEBUTTONDOWN:
-                    x, y = pygame.mouse.get_pos()
+            print("❌ Invalid choice! Please enter 1-4.")
 
-                    if y < 100:
-                        continue
-                    
-                    col = x // self.cell_size
-                    row = (y - 100) // self.cell_size
-                    
-                    if 0 <= row < self.board_size and 0 <= col < self.board_size and self.board[row][col] == ' ':
-                        self.board[row][col] = 'X'
-                        
-                        if self.is_winner('X'):
-                            self.game_over = True
-                            self.winner = 'X'
-                        elif self.is_board_full():
-                            self.game_over = True
-                        else:
-                            self.ai_move()
-                            
-                            if self.is_winner('O'):
-                                self.game_over = True
-                                self.winner = 'O'
-                            elif self.is_board_full():
-                                self.game_over = True
-                
-                if self.game_over and event.type == pygame.KEYDOWN and event.key == pygame.K_SPACE:
-                    self.reset_game()
-            
-            self.draw_board()
-            
-            if self.game_over:
-                self.show_game_over()
-            
-            pygame.display.update()
-            clock.tick(30)
+
+def main():
+    print("\n" + "="*70)
+    print(" " * 15 + "BERNSTEIN-VAZIRANI ALGORITHM")
+    print(" " * 20 + "Quantum Computing Demo")
+    print("="*70)
+    
+    try:
+        interactive_mode()
+    except KeyboardInterrupt:
+        print("\n\nProgram interrupted by user.")
+        print("="*70 + "\n")
+    except Exception as e:
+        print(f"\n❌ An error occurred: {e}")
+        print("="*70 + "\n")
+
 
 if __name__ == "__main__":
-    game = RexzeaTicTacToe()
-    game.run()
+    main()
